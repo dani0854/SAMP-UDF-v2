@@ -13,9 +13,9 @@
 			msg .= "`r`n`tat " . e.file . " (" . e.What . ":" . e.Line . ")"
 		}
 	}
-	if (stream = "stdout") {
+	if (stream == "stdout") {
 		FileAppend, %msg%`r`n, *
-	} else if (stream = "stderr") {
+	} else if (stream == "stderr") {
 		FileAppend, %msg%`r`n, **
 	} else {
 		stdLog("Invalid stream",,true)
