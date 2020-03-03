@@ -25,5 +25,6 @@
 # Changelog
 ## Current
 - Added stdLog with traceback
-- Added dll functions
+- Added common functions lib
 - Added SAMP_BASE
+- Added addChatMessage()
