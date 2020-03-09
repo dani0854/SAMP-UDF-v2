@@ -20,7 +20,7 @@ class SAMP_UDF_V2 extends SAMP_BASE {
   addChatMessage(wText, msgColor := -1) {
     wText := "" wText
     
-    if (!(chatFunc := this.getSAMPAddr("FUNC_SAMP_ADDTOCHATWND")) || !(chatPtr := this.readDWORD(this.getSAMPAddr("ADDR_SAMP_CHATMSG_PTR")))) {
+    if (!(chatFunc := this.getSAMPAddr("FUNC_SAMP_ADDTOCHATWND")) || !(chatPtr := this.readDWORD(this.readDWORD(this.getSAMPAddr("ADDR_SAMP_CHATMSG_PTR_PTR"))))) {
       return false
     }
 
