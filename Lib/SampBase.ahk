@@ -1,27 +1,27 @@
-﻿#Include <stdLog>
-#Include <common>
-global LOG_LVL := 1
+﻿#NoEnv
+#Include <ThrowsNonexistent>
 
-class SAMP_BASE
-{ 
+class SampBase extends ThrowsNonexistent {
+    #IncludeAgain Logger.ahk
+    #IncludeAgain Common.ahk
+
     hGTA                                 := 0x0
     dwGTAPID                             := 0x0
-    dwSAMP                               := 0x0
-    dwSAMPSize                           := 0x0
     pMemory                              := {}
-    dwSAMPAddr                           := {}
+    knownModules                         := {}
+    knownAddr                            := {}
     iRefreshHandles                      := 0
     
     static szWindow                      := "CR-MP.COM" ;"GTA:SA:MP" ;"CR-MP.COM"
-    static patternPath                   := A_ScriptDir . "\patterns.ini"
+
     
     __Delete() {
         if (this.hGTA && this.pMemory[1]) {
-            stdLog("Freeing memory", 5)
+            this.Logger.stdLog("Freeing memory", 5)
             this.virtualFreeEx(this.pMemory[1], 0, 0x8000)
         } else if (this.hGTA) {
-            stdLog("Closing handle", 5)
-            closeProcess(this.hGTA)
+            this.Logger.stdLog("Closing handle", 5)
+            this.Common.closeProcess(this.hGTA)
         }
     }
     
@@ -29,71 +29,49 @@ class SAMP_BASE
         if (A_TickCount + 500 < iRefreshHandles && hGTA) {
             return true
         } else {
-            stdLog("Refreshing handles", 5)
+            this.Logger.stdLog("Refreshing handles", 5)
             iRefreshHandles := A_TickCount
-            return this.refreshGTA() && this.refreshSAMP() && this.refreshMemory()
+            return this.refreshGTA() && this.refreshMemory()
         }
     }
     
     refreshGTA() {
-        stdLog("Rerfesh GTA handle", 5)
+        this.Logger.stdLog("Rerfesh GTA handle", 5)
         newPID := 0
         WinGet, newPID, PID, % this.szWindow
         if(!newPID) {
-            stdLog("Pid not found for " . this.szWindow,, true)
+            this.Logger.stdLog("Pid not found for " . this.szWindow,, true)
             if(this.hGTA) {
-                stdLog("GTA handle open, closing handle", 3)
+                this.Logger.stdLog("GTA handle open, closing handle", 3)
                 this.virtualFreeEx(this.pMemory[1], 0, 0x8000)
-                closeProcess(this.hGTA)
+                this.Common.closeProcess(this.hGTA)
                 this.hGTA := 0x0
             }
             this.dwGTAPID := 0
-            this.hGTA := 0x0
-            this.dwSAMP := 0x0
-            this.pMemory := []
+            this.knownModules := {}
+            this.pMemory := {}
             return false
         }
         
         if(!this.hGTA || (this.dwGTAPID != newPID)) {
-            stdLog("PID changed or handle closed, openning process with PID - " . newPID, 3)
-            this.hGTA := openProcess(newPID)
-            if(!this.hGTA) { ; openProcess fail
+            this.Logger.stdLog("PID changed or handle closed, openning process with PID - " . newPID, 3)
+            this.pMemory := {}
+            this.knownModules := {}
+            this.hGTA := this.Common.openProcess(newPID)
+            if(!this.hGTA) { ; this.Common.openProcess fail
                 this.dwGTAPID := 0
                 this.hGTA := 0x0
-                this.dwSAMP := 0x0
-                this.pMemory := []
                 return false
             }
-            this.dwGTAPID := newPID
-            this.dwSAMP := 0x0
-            this.pMemory := []
         }
-        return true
-    }
-    
-    refreshSAMP() {
-        stdLog("Rerfesh SAMP", 5)
-        if(this.dwSAMP) {
-            stdLog("SAMP module base adress already set", 5)
-            return true
-        }
-        stdLog("Getting SAMP module adress", 5)
-        this.dwSAMP := this.getModuleBaseAddress("samp.dll")
-        if(!this.dwSAMP) {
-            return false
-        }
-        stdLog("Getting SAMP module size", 5)
-        this.dwSAMPSize := this.getModuleSize(this.dwSAMP)
-        if(!this.dwSAMPSize) {
-            return false
-        }
+        this.dwGTAPID := newPID
         return true
     }
 
     refreshMemory() {
-        stdLog("Rerfeshing memory", 5)
+        this.Logger.stdLog("Rerfeshing memory", 5)
         if(!this.pMemory.Length()) {
-            stdLog("Allocating memory", 5)
+            this.Logger.stdLog("Allocating memory", 5)
             pMem := this.virtualAllocEx(6144, 0x1000 | 0x2000, 0x40)
             if(!pMem) {
                 return false
@@ -102,53 +80,36 @@ class SAMP_BASE
                 this.pMemory[(A_Index = 6 ? "InjectFunc" : A_Index)] := pMem + (A_Index-1) * 1024
             }
         } else {
-            stdLog("Memory already allocated", 5)
+            this.Logger.stdLog("Memory already allocated", 5)
         }
         return true
     }
     
-    getSAMPAddr(key, num := 0) {
+    getAddr(patternObj, key) {
+        if (!patternObj || !key) {
+            this.Logger.stdLog("Invalid args",,true)
+            return false
+        }
         if (!this.checkHandles()) {
             return false
         }
-        if (this.dwSAMPAddr[key]) {
-            return this.dwSAMPAddr[key] + this.dwSAMP
-        }
-        if (num) {
-            ptrNum := "_" . num
-        }
-        IniRead, aPatternStr, % this.patternPath , patterns, %key%%ptrNum%, %A_Space%
-        if (!aPatternStr && !num) {
-            IniRead, aPatternStr, % this.patternPath , patterns, %key%_1, %A_Space%
-            if (!aPatternStr) {
-                stdLog("Pattern not specified for - " . key,, true)
+        if (!(moduleBaseAddr := this.getModuleBaseAddress(patternObj.module))) {
                 return false
-            }
-            loop 
-            {
-                IniRead, aPatternStr, % this.patternPath , patterns, %key%_%A_Index%, %A_Space%
-                if (!aPatternStr) {
-                    stdLog("Pattern not found for - " . key,, true)
-                    return false
-                }
-                offset := this.modulePatternScan(this.dwSAMP, this.dwSAMPSize, aPatternStr)
-                if (!ErrorLevel) {
-                    IniRead, pattern_offset, % this.patternPath , patterns, %key%_%A_Index%_offset, 0
-                    offset += round(pattern_offset)
-                    break
-                }
-            }
-        } else {
-            offset := this.modulePatternScan(this.dwSAMP, this.dwSAMPSize, aPatternStr)
-            if (ErrorLevel) {
-                stdLog("Pattern not found for - " . key,, true)
-                return false
-            }
-            IniRead, pattern_offset, % this.patternPath , patterns, %key%%ptrNum%_offset, 0
-            offset += round(pattern_offset)
         }
-        this.dwSAMPAddr[key] := offset
-        return this.dwSAMP + offset
+        if (this.knownAddr[patternObj][key]) {
+            return this.knownAddr[patternObj][key] + moduleBaseAddr
+        }
+
+        for k, pat in patternObj[key]
+        {
+            if (offset := this.modulePatternScan(moduleBaseAddr, this.getModuleSize(patternObj.module), pat.pattern)) {
+                this.knownAddr[patternObj] := Object(key, offset + round(pat.offset))
+                return this.knownAddr[patternObj][key] + moduleBaseAddr
+            }
+        }
+
+        this.Logger.stdLog("Pattern not found for - " . key,, true)
+        return false
     }
     
     callWithParams(dwFunc, aParams, bCleanupStack := true) {
@@ -158,7 +119,7 @@ class SAMP_BASE
         
         if (aParams.Length() / 2 != round(aParams.Length() / 2))
         {
-            stdLog("Parameters number not even - " . aParams.Length(),,true)
+            this.Logger.stdLog("Parameters number not even - " . aParams.Length(),,true)
             return false
         }
         
@@ -173,7 +134,7 @@ class SAMP_BASE
                 dwMemAddress := aParams[A_Index*2]
             } else if (aParams[A_Index*2-1] == "s") {
                 if (j>3) {
-                    stdLog("Invalid parameter type - " . aParams[A_Index*2-1],,true)
+                    this.Logger.stdLog("Invalid parameter type - " . aParams[A_Index*2-1],,true)
                     return false
                 }
                 dwMemAddress := this.pMemory[j++]
@@ -181,14 +142,14 @@ class SAMP_BASE
                     return false
                 }
             } else {
-                stdLog("Invalid parameter type - " . aParams[A_Index*2-1],,true)
+                this.Logger.stdLog("Invalid parameter type - " . aParams[A_Index*2-1],,true)
                 return false
             }
             NumPut(0x68, injectData, (A_Index-1) * 5, "UChar")
             NumPut(dwMemAddress, injectData, (A_Index-1) * 5 + 1, "UInt")
         }
         
-        offset := dwFunc - ( this.pMemory["InjectFunc"] + paramCnt * 5 + 5 )
+        offset := dwFunc - ( this.pMemory.InjectFunc + paramCnt * 5 + 5 )
         NumPut(0xE8, injectData, paramCnt * 5, "UChar")
         NumPut(offset, injectData, paramCnt * 5 + 1, "Int")
         
@@ -200,32 +161,34 @@ class SAMP_BASE
             NumPut(0xC3, injectData, paramCnt * 5 + 5, "UChar")
         }
         
-        if(!this.writeRaw(this.pMemory["InjectFunc"], &injectData, dwLen)) {
+        if(!this.writeRaw(this.pMemory.InjectFunc, &injectData, dwLen)) {
             return false
         }
 
-        hThread := this.createRemoteThread(0, 0, this.pMemory["InjectFunc"], 0, 0, 0)
+        hThread := this.createRemoteThread(0, 0, this.pMemory.InjectFunc, 0, 0, 0)
         if(!hThread) {
             return false
         }
 
-        if(!waitForSingleObject(hThread, 0xFFFFFFFF)) {
+        if(!this.Common.waitForSingleObject(hThread, 0xFFFFFFFF)) {
             return false
         }   
         
-        closeProcess(hThread)
+        this.Common.closeProcess(hThread)
         
         return true
     }
     
     getModuleBaseAddress(sModule) {
         if(!sModule) {
-            stdLog("Invalid module",,true)
+            this.Logger.stdLog("Invalid module",,true)
             return false
         }
-        if (!this.hGTA) {
-            stdLog("Invalid GTA handle",,true)
+        if (!this.checkHandles()) {
             return false
+        }
+        if (this.knownModules[sModule].addr) {
+            return this.knownModules[sModule].addr
         }
         
         dwSize = 1024*4                    ; 1024 * sizeof(HMODULE = 4)
@@ -239,7 +202,7 @@ class SAMP_BASE
                             , "UInt", 0x01 ; only 32-bit modules
                             , "UInt") 
         if(!dwRet) {
-            stdLog("Psapi.dll\EnumProcessModulesEx system error - " . A_LastError,,true)
+            this.Logger.stdLog("Psapi.dll\EnumProcessModulesEx system error - " . A_LastError,,true)
             return false
         }
         
@@ -255,50 +218,60 @@ class SAMP_BASE
                     , "UInt", 260
                     , "UInt")
             if(!dwRet && A_LastError != 0x06) { ; returns INVALID_HANDLE even if sCurModulePath is retrieved
-                stdLog("Psapi.dll\GetModuleFileNameEx system error - " . A_LastError,,true)
+                this.Logger.stdLog("Psapi.dll\GetModuleFileNameEx system error - " . A_LastError,,true)
                 return false
             }
             SplitPath, sCurModulePath, sFilename
             if(sModule == sFilename) {
-                return hModule
+                this.knownModules[sModule] := {addr: hModule}
+                return this.knownModules[sModule].addr 
             }
         }
         
-        stdLog("Module not found - " . sModule,,true)
+        this.Logger.stdLog("Module not found - " . sModule,,true)
         return false
     }
     
-    getModuleSize(hModule) {
-        if(!hModule) {
-            stdLog("Invalid module",,true)
+    getModuleSize(sModule) {
+        if(!sModule) {
+            this.Logger.stdLog("Invalid module",,true)
             return false
         }
-        if (!this.hGTA) {
-            stdLog("Invalid GTA handle",,true)
+        if (!this.checkHandles()) {
             return false
+        }
+        if (!this.knownModules[sModule].addr) {
+            if (!(this.knownModules[sModule].addr := this.getModuleBaseAddress(sModule))) {
+                return false
+            }
+        }
+        if (this.knownModules[sModule].size) {
+            return this.knownModules[sModule].size
         }
         
         moduleInfoSize := (A_PtrSize = 4) ? 12 : 24
         VarSetCapacity(moduleInfo, moduleInfoSize)
         dwRet := DllCall("Psapi.dll\GetModuleInformation"
             , "Ptr", this.hGTA
-            , "Ptr", hModule
+            , "Ptr", knownModules[sModule].addr
             , "Ptr", &moduleInfo
             , "UInt", moduleInfoSize)
         if(!dwRet) {
-            stdLog("Psapi.dll\GetModuleInformation system error - " . A_LastError,,true)
+            this.Logger.stdLog("Psapi.dll\GetModuleInformation system error - " . A_LastError,,true)
             return false
         }
         
-        return NumGet(moduleInfo, A_PtrSize, "UInt")
+        this.knownModules[sModule].size := NumGet(moduleInfo, A_PtrSize, "UInt")
+        
+        return this.knownModules[sModule].size
     }
 
     writeRaw(dwAddress, pBuffer, dwLen) {
-        if (!this.checkHandles()) {
+        if (!dwAddress) {
+            this.Logger.stdLog("Invalid address",,true)
             return false
         }
-        if (!dwAddress) {
-            stdLog("Invalid address",,true)
+        if (!this.checkHandles()) {
             return false
         }
         
@@ -310,7 +283,7 @@ class SAMP_BASE
                             , "UInt", 0
                             , "UInt")
         if(!dwRet) {
-            stdLog("WriteProcessMemory system error - " . A_LastError,,true)
+            this.Logger.stdLog("WriteProcessMemory system error - " . A_LastError,,true)
             return false
         }
 
@@ -318,16 +291,16 @@ class SAMP_BASE
     }
 
     writeString(dwAddress, wString) {
-        if (!this.checkHandles()) {
+        if (!dwAddress) {
+            this.Logger.stdLog("Invalid address",,true)
             return false
         }
-        if (!dwAddress) {
-            stdLog("Invalid address",,true)
+        if (!this.checkHandles()) {
             return false
         }
         sString := wString
         if (A_IsUnicode) {
-            sString := unicodeToAnsi(wString)
+            sString := this.Common.unicodeToAnsi(wString)
         }
         
         dwRet := DllCall("WriteProcessMemory"
@@ -338,7 +311,7 @@ class SAMP_BASE
                             , "UInt", 0
                             , "UInt")
         if(!dwRet) {
-            stdLog("WriteProcessMemory system error - " . A_LastError,,true)
+            this.Logger.stdLog("WriteProcessMemory system error - " . A_LastError,,true)
             return false
         }
         
@@ -346,11 +319,6 @@ class SAMP_BASE
     }
     
     virtualAllocEx(dwSize, flAllocationType, flProtect) {
-        if (!this.hGTA) {
-            stdLog("Invalid GTA handle",,true)
-            return false
-        }
-        
         dwRet := DllCall("VirtualAllocEx"
                             , "UInt", this.hGTA
                             , "UInt", 0
@@ -359,7 +327,7 @@ class SAMP_BASE
                             , "UInt", flProtect
                             , "UInt")
         if(!dwRet) {
-            stdLog("VirtualAllocEx system error - " . A_LastError,,true)
+            this.Logger.stdLog("VirtualAllocEx system error - " . A_LastError,,true)
             return false
         }
         
@@ -367,10 +335,10 @@ class SAMP_BASE
     }
     
     virtualFreeEx(lpAddress, dwSize, dwFreeType) {
-        if (!this.hGTA) {
-            stdLog("Invalid GTA handle",,true)
+        if (!this.checkHandles()) {
             return false
         }
+        
         dwRet := DllCall(    "VirtualFreeEx"
                             , "UInt", this.hGTA
                             , "UInt", lpAddress
@@ -378,15 +346,14 @@ class SAMP_BASE
                             , "UInt", dwFreeType
                             , "UInt")
         if(!dwRet) {
-            stdLog("VirtualFreeEx system error - " . A_LastError,,true)
+            this.Logger.stdLog("VirtualFreeEx system error - " . A_LastError,,true)
         }
         return dwRet
     }
     
     readDWORD(dwAddress) {      
-        if (!this.hGTA) {
+        if (!this.checkHandles()) {
             ErrorLevel := 0x06 ; Invalid Handle
-            stdLog("Invalid GTA handle",,true)
             return false
         }
         
@@ -400,7 +367,7 @@ class SAMP_BASE
                             , "UInt")
         if(!dwRet && A_LastError != 0x12B) {
             ErrorLevel := A_LastError
-            stdLog("ReadProcessMemory system error - " . A_LastError,,true)
+            this.Logger.stdLog("ReadProcessMemory system error - " . A_LastError,,true)
             return false
         }
         
@@ -409,13 +376,12 @@ class SAMP_BASE
     }
     
     readRaw(address, bufferAddres, bytes) {
-        if (!this.hGTA) {
+        if (!this.checkHandles()) {
             ErrorLevel := 0x06 ; Invalid Handle
-            stdLog("Invalid GTA handle",,true)
             return false
         }
         if(!address) {
-            stdLog("Invalid address",,true)
+            this.Logger.stdLog("Invalid address",,true)
             return false
         }
         dwRet := DllCall("ReadProcessMemory"
@@ -426,15 +392,14 @@ class SAMP_BASE
             , "UInt*", pNumberOfBytesRead
             , "UInt")
         if(!dwRet && A_LastError != 0x12B) {
-            stdLog("ReadProcessMemory system error - " . A_LastError,,true)
+            this.Logger.stdLog("ReadProcessMemory system error - " . A_LastError,,true)
             return false
         }
         return pNumberOfBytesRead
     }
     
     createRemoteThread(lpThreadAttributes, dwStackSize, lpStartAddress, lpParameter, dwCreationFlags, lpThreadId) {
-        if (!this.hGTA) {
-            stdLog("Invalid GTA handle",,true)
+        if (!this.checkHandles()) {
             return false
         }
 
@@ -448,7 +413,7 @@ class SAMP_BASE
                             , "UInt", lpThreadId
                             , "UInt")
         if(!hThread) {
-            stdLog("CreateRemoteThread system error - " . A_LastError,,true)
+            this.Logger.stdLog("CreateRemoteThread system error - " . A_LastError,,true)
             return false
         }
         
@@ -456,13 +421,13 @@ class SAMP_BASE
     }
     
     modulePatternScan(dwModuleBaseAddress, dwModuleSize, aPatternStr) {
-        if(!this.hGTA) {
-            stdLog("Invalid GTA handle",,true)
-            ErrorLevel := 0x06
+        if (!this.checkHandles()) {
+            ErrorLevel := 0x06 ; Invalid Handle
             return false
-        } 
-        if (!getNeedleFromPatternStr(patternMask, needleBuffer, aPatternStr)) {
-            stdLog("Invalid pattern",,true)
+        }
+        
+        if (!this.Common.getNeedleFromPatternStr(patternMask, needleBuffer, aPatternStr)) {
+            this.Logger.stdLog("Invalid pattern",,true)
             ErrorLevel := -1
             return false
         }
@@ -477,14 +442,13 @@ class SAMP_BASE
     }
     
     patternScan(startAddress, sizeOfRegionBytes, patternMask, needleBufferAddress) {
-        if(!this.hGTA) {
-            stdLog("Invalid GTA handle",,true)
-            ErrorLevel := 0x06
+        if (!this.checkHandles()) {
+            ErrorLevel := 0x06 ; Invalid Handle
             return false
         }
 
         VarSetCapacity(buffer, sizeOfRegionBytes)
-        if (!this.readRaw(startAddress, &buffer, sizeOfRegionBytes) || (offset := bufferScanForMaskedPattern(&buffer, sizeOfRegionBytes, patternMask, needleBufferAddress)) < 0) {
+        if (!this.readRaw(startAddress, &buffer, sizeOfRegionBytes) || (offset := this.Common.bufferScanForMaskedPattern(&buffer, sizeOfRegionBytes, patternMask, needleBufferAddress)) < 0) {
             ErrorLevel := -1
             return false
         }
